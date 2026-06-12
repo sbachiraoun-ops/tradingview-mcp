@@ -1,6 +1,6 @@
-//@version=5
+//@version=6
 strategy(
-     title              = "NQ ORB — Advanced",
+     title              = "NQ ORB - Advanced",
      shorttitle         = "NQ ORB",
      overlay            = true,
      initial_capital    = 100000,
@@ -11,9 +11,9 @@ strategy(
      calc_on_every_tick = false
 )
 
-// ══════════════════════════════════════════════════════════════════════════════
+// ==============================================================================
 // INPUTS
-// ══════════════════════════════════════════════════════════════════════════════
+// ==============================================================================
 
 var string G_ORB  = "Opening Range"
 var string G_FILT = "Filters"
@@ -41,9 +41,9 @@ i_bull      = input.color (color.green,  "Bull Color",                          
 i_bear      = input.color (color.red,    "Bear Color",                                  group=G_VIS)
 i_show_tbl  = input.bool  (true,  "Show Info Table",                                    group=G_VIS)
 
-// ══════════════════════════════════════════════════════════════════════════════
+// ==============================================================================
 // SESSION & ORB BUILDING
-// ══════════════════════════════════════════════════════════════════════════════
+// ==============================================================================
 
 in_sess    = not na(time(timeframe.period, i_sess))
 sess_start = in_sess and not in_sess[1]
@@ -78,9 +78,9 @@ if in_sess and not orb_ready
 orb_range    = na(orb_hi) or na(orb_lo) ? na : orb_hi - orb_lo
 orb_just_set = orb_ready and not orb_ready[1]
 
-// ══════════════════════════════════════════════════════════════════════════════
+// ==============================================================================
 // FILTERS
-// ══════════════════════════════════════════════════════════════════════════════
+// ==============================================================================
 
 // Gap vs prior close (approximate — uses last bar before RTH open)
 gap_pct = (not na(prev_cls) and prev_cls > 0.0)
@@ -93,9 +93,9 @@ vol_ok  = not i_use_vol or (not na(vol_ma) and volume >= vol_ma * i_vol_mult)
 
 atr = ta.atr(i_atr_len)
 
-// ══════════════════════════════════════════════════════════════════════════════
+// ==============================================================================
 // BREAKOUT STATE  (one direction per day, one trade per day)
-// ══════════════════════════════════════════════════════════════════════════════
+// ==============================================================================
 
 var bool day_broke_up = false  // any close above ORB high today
 var bool day_broke_dn = false  // any close below ORB low today
@@ -124,10 +124,10 @@ if raw_dn
     day_broke_dn := true
     bo_dn_bar    := bar_index
 
-// ──────────────────────────────────────────────────────────────────────────────
+// ------------------------------------------------------------------------------
 // FAILED ORB: breakout happened within last 2 bars, price is now back inside
 // → fade the trapped breakout traders
-// ──────────────────────────────────────────────────────────────────────────────
+// ------------------------------------------------------------------------------
 fail_short = i_failed and not day_traded and strategy.position_size == 0
              and day_broke_up and (bar_index - bo_up_bar) <= 2
              and close < orb_hi and close > orb_lo
@@ -136,10 +136,10 @@ fail_long  = i_failed and not day_traded and strategy.position_size == 0
              and day_broke_dn and (bar_index - bo_dn_bar) <= 2
              and close > orb_lo and close < orb_hi
 
-// ──────────────────────────────────────────────────────────────────────────────
+// ------------------------------------------------------------------------------
 // RETEST: after a confirmed break, price pulls back to the broken ORB level
 // and closes back on the breakout side
-// ──────────────────────────────────────────────────────────────────────────────
+// ------------------------------------------------------------------------------
 tol = 0.0015  // 0.15% allowance for dips through the ORB level on retest
 
 retest_long  = i_retest and can_enter and day_broke_up
@@ -152,9 +152,9 @@ retest_short = i_retest and can_enter and day_broke_dn
 enter_long  = (i_retest ? retest_long  : raw_up)  or fail_long
 enter_short = (i_retest ? retest_short : raw_dn)   or fail_short
 
-// ══════════════════════════════════════════════════════════════════════════════
+// ==============================================================================
 // EXECUTION  (2 contracts split across TP1 and TP2)
-// ══════════════════════════════════════════════════════════════════════════════
+// ==============================================================================
 
 var float act_tp1 = na
 var float act_tp2 = na
@@ -190,9 +190,9 @@ if strategy.position_size == 0 and day_traded
     act_tp2 := na
     act_sl  := na
 
-// ══════════════════════════════════════════════════════════════════════════════
+// ==============================================================================
 // VISUALS
-// ══════════════════════════════════════════════════════════════════════════════
+// ==============================================================================
 
 // Opening range box (shaded region for the ORB candles)
 var box orb_box = na
@@ -223,9 +223,9 @@ plotshape(fail_short,                      "Fail Short", shape.triangledown, loc
 // Subtle background tint when volume is favourable
 bgcolor(in_sess and orb_ready and vol_ok ? color.new(color.green, 97) : na, title="Vol OK bg")
 
-// ══════════════════════════════════════════════════════════════════════════════
+// ==============================================================================
 // INFO TABLE
-// ══════════════════════════════════════════════════════════════════════════════
+// ==============================================================================
 
 var table tbl = table.new(position.top_right, 2, 7,
      bgcolor      = color.new(color.black, 70),
