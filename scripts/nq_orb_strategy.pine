@@ -22,13 +22,13 @@ var string G_VIS  = "Visual"
 
 i_orb_mins  = input.int   (15,    "ORB Window (min)",        minval=1, maxval=60,       group=G_ORB)
 i_sess      = input.session("0930-1600", "RTH Session",                                 group=G_ORB)
-i_retest    = input.bool  (true,  "Wait for Retest Entry",                              group=G_ORB)
+i_retest    = input.bool  (false, "Wait for Retest Entry",                              group=G_ORB)
 i_failed    = input.bool  (true,  "Trade Failed ORB",                                   group=G_ORB)
 
-i_use_vol   = input.bool  (true,  "Require Volume Spike",                               group=G_FILT)
+i_use_vol   = input.bool  (false, "Require Volume Spike",                               group=G_FILT)
 i_vol_len   = input.int   (20,    "Volume MA Length",         minval=5,                 group=G_FILT)
-i_vol_mult  = input.float (1.5,   "Min Volume (× avg)",       minval=1.0, step=0.1,     group=G_FILT)
-i_max_gap   = input.float (0.8,   "Max Pre-mkt Gap %",        minval=0.0, step=0.1,     group=G_FILT)
+i_vol_mult  = input.float (1.3,   "Min Volume (x avg)",       minval=1.0, step=0.1,     group=G_FILT)
+i_max_gap   = input.float (2.0,   "Max Pre-mkt Gap %",        minval=0.0, step=0.1,     group=G_FILT)
 
 i_atr_len   = input.int   (14,    "ATR Length",               minval=1,                 group=G_RISK)
 i_sl_orb    = input.bool  (true,  "Stop at ORB Level (else ATR-based)",                 group=G_RISK)
@@ -51,15 +51,17 @@ sess_start = in_sess and not in_sess[1]
 // How many bars cover the ORB window (handles different timeframes)
 orb_bars = math.max(1, math.round(i_orb_mins / timeframe.multiplier))
 
-var float orb_hi    = na
-var float orb_lo    = na
-var bool  orb_ready = false
-var int   sess_bnum = 0
-var int   orb_s_idx = na  // bar_index of first session bar (box left edge)
-var float prev_cls  = na
+var float orb_hi     = na
+var float orb_lo     = na
+var bool  orb_ready  = false
+var int   sess_bnum  = 0
+var int   orb_s_idx  = na    // bar_index of first session bar (box left edge)
+var float prev_cls   = na
+var float sess_open  = na    // opening price of the RTH session (for gap calc)
 
 if sess_start
     prev_cls  := close[1]
+    sess_open := open        // first RTH bar open — used for accurate gap %
     orb_hi    := na
     orb_lo    := na
     orb_ready := false
@@ -82,9 +84,10 @@ orb_just_set = orb_ready and not orb_ready[1]
 // FILTERS
 // ==============================================================================
 
-// Gap vs prior close (approximate — uses last bar before RTH open)
-gap_pct = (not na(prev_cls) and prev_cls > 0.0)
-          ? math.abs(open - prev_cls) / prev_cls * 100.0
+// Gap = (RTH session open - prior close) / prior close
+// Uses sess_open so the % stays constant throughout the day
+gap_pct = (not na(prev_cls) and prev_cls > 0.0 and not na(sess_open))
+          ? math.abs(sess_open - prev_cls) / prev_cls * 100.0
           : 0.0
 gap_ok  = gap_pct <= i_max_gap
 
@@ -140,7 +143,7 @@ fail_long  = i_failed and not day_traded and strategy.position_size == 0
 // RETEST: after a confirmed break, price pulls back to the broken ORB level
 // and closes back on the breakout side
 // ------------------------------------------------------------------------------
-tol = 0.0015  // 0.15% allowance for dips through the ORB level on retest
+tol = 0.005   // 0.5% allowance for dips through the ORB level on retest
 
 retest_long  = i_retest and can_enter and day_broke_up
                and low <= orb_hi * (1.0 + tol) and close > orb_hi
@@ -238,15 +241,15 @@ if barstate.islast and i_show_tbl
 
     table.cell(tbl, 0, 0, "ORB Range", text_color=lc, text_size=sz)
     table.cell(tbl, 1, 0,
-         na(orb_range) ? "Building…" : str.tostring(math.round(orb_range, 2)),
+         na(orb_range) ? "Building..." : str.tostring(math.round(orb_range, 2)),
          text_color=color.white, text_size=sz)
 
     table.cell(tbl, 0, 1, "ORB High",  text_color=lc, text_size=sz)
-    table.cell(tbl, 1, 1, orb_ready ? str.tostring(math.round(orb_hi, 2)) : "—",
+    table.cell(tbl, 1, 1, orb_ready ? str.tostring(math.round(orb_hi, 2)) : "-",
          text_color=i_bull, text_size=sz)
 
     table.cell(tbl, 0, 2, "ORB Low",   text_color=lc, text_size=sz)
-    table.cell(tbl, 1, 2, orb_ready ? str.tostring(math.round(orb_lo, 2)) : "—",
+    table.cell(tbl, 1, 2, orb_ready ? str.tostring(math.round(orb_lo, 2)) : "-",
          text_color=i_bear, text_size=sz)
 
     table.cell(tbl, 0, 3, "Gap %",     text_color=lc, text_size=sz)
@@ -254,7 +257,7 @@ if barstate.islast and i_show_tbl
          text_color=gap_ok ? color.lime : color.orange, text_size=sz)
 
     table.cell(tbl, 0, 4, "ATR",       text_color=lc, text_size=sz)
-    table.cell(tbl, 1, 4, not na(atr) ? str.tostring(math.round(atr, 2)) : "—",
+    table.cell(tbl, 1, 4, not na(atr) ? str.tostring(math.round(atr, 2)) : "-",
          text_color=color.white, text_size=sz)
 
     table.cell(tbl, 0, 5, "Mode",      text_color=lc, text_size=sz)
