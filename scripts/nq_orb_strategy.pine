@@ -1,0 +1,266 @@
+//@version=5
+strategy(
+     title              = "NQ ORB — Advanced",
+     shorttitle         = "NQ ORB",
+     overlay            = true,
+     initial_capital    = 100000,
+     default_qty_type   = strategy.fixed,
+     default_qty_value  = 2,
+     commission_type    = strategy.commission.cash_per_contract,
+     commission_value   = 2.5,
+     calc_on_every_tick = false
+)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+var string G_ORB  = "Opening Range"
+var string G_FILT = "Filters"
+var string G_RISK = "Risk / Targets"
+var string G_VIS  = "Visual"
+
+i_orb_mins  = input.int   (15,    "ORB Window (min)",        minval=1, maxval=60,       group=G_ORB)
+i_sess      = input.session("0930-1600", "RTH Session",                                 group=G_ORB)
+i_retest    = input.bool  (true,  "Wait for Retest Entry",                              group=G_ORB)
+i_failed    = input.bool  (true,  "Trade Failed ORB",                                   group=G_ORB)
+
+i_use_vol   = input.bool  (true,  "Require Volume Spike",                               group=G_FILT)
+i_vol_len   = input.int   (20,    "Volume MA Length",         minval=5,                 group=G_FILT)
+i_vol_mult  = input.float (1.5,   "Min Volume (× avg)",       minval=1.0, step=0.1,     group=G_FILT)
+i_max_gap   = input.float (0.8,   "Max Pre-mkt Gap %",        minval=0.0, step=0.1,     group=G_FILT)
+
+i_atr_len   = input.int   (14,    "ATR Length",               minval=1,                 group=G_RISK)
+i_sl_orb    = input.bool  (true,  "Stop at ORB Level (else ATR-based)",                 group=G_RISK)
+i_sl_atr    = input.float (0.5,   "Stop ATR mult (ATR mode only)",  minval=0.1, step=0.1, group=G_RISK)
+i_tp1_rr    = input.float (1.0,   "TP1 (× ORB range)",        minval=0.5, step=0.25,   group=G_RISK)
+i_tp2_rr    = input.float (2.0,   "TP2 (× ORB range)",        minval=0.5, step=0.25,   group=G_RISK)
+
+i_box_fill  = input.color (color.new(color.blue, 85), "ORB Box Fill",                   group=G_VIS)
+i_bull      = input.color (color.green,  "Bull Color",                                  group=G_VIS)
+i_bear      = input.color (color.red,    "Bear Color",                                  group=G_VIS)
+i_show_tbl  = input.bool  (true,  "Show Info Table",                                    group=G_VIS)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SESSION & ORB BUILDING
+// ══════════════════════════════════════════════════════════════════════════════
+
+in_sess    = not na(time(timeframe.period, i_sess))
+sess_start = in_sess and not in_sess[1]
+
+// How many bars cover the ORB window (handles different timeframes)
+orb_bars = math.max(1, math.round(i_orb_mins / timeframe.multiplier))
+
+var float orb_hi    = na
+var float orb_lo    = na
+var bool  orb_ready = false
+var int   sess_bnum = 0
+var int   orb_s_idx = na  // bar_index of first session bar (box left edge)
+var float prev_cls  = na
+
+if sess_start
+    prev_cls  := close[1]
+    orb_hi    := na
+    orb_lo    := na
+    orb_ready := false
+    sess_bnum := 0
+    orb_s_idx := na
+
+if in_sess and not orb_ready
+    if sess_bnum == 0
+        orb_s_idx := bar_index
+    sess_bnum += 1
+    orb_hi     := na(orb_hi) ? high : math.max(orb_hi, high)
+    orb_lo     := na(orb_lo) ? low  : math.min(orb_lo, low)
+    if sess_bnum >= orb_bars
+        orb_ready := true
+
+orb_range    = na(orb_hi) or na(orb_lo) ? na : orb_hi - orb_lo
+orb_just_set = orb_ready and not orb_ready[1]
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FILTERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Gap vs prior close (approximate — uses last bar before RTH open)
+gap_pct = (not na(prev_cls) and prev_cls > 0.0)
+          ? math.abs(open - prev_cls) / prev_cls * 100.0
+          : 0.0
+gap_ok  = gap_pct <= i_max_gap
+
+vol_ma  = ta.sma(volume, i_vol_len)
+vol_ok  = not i_use_vol or (not na(vol_ma) and volume >= vol_ma * i_vol_mult)
+
+atr = ta.atr(i_atr_len)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BREAKOUT STATE  (one direction per day, one trade per day)
+// ══════════════════════════════════════════════════════════════════════════════
+
+var bool day_broke_up = false  // any close above ORB high today
+var bool day_broke_dn = false  // any close below ORB low today
+var bool day_traded   = false  // a trade has been taken today
+var int  bo_up_bar    = -9999  // bar_index of the upward break
+var int  bo_dn_bar    = -9999  // bar_index of the downward break
+
+if sess_start
+    day_broke_up := false
+    day_broke_dn := false
+    day_traded   := false
+    bo_up_bar    := -9999
+    bo_dn_bar    := -9999
+
+can_enter = in_sess and orb_ready and gap_ok and strategy.position_size == 0 and not day_traded
+
+// Raw close-confirmed breakouts (first direction only)
+raw_up = can_enter and not day_broke_up and not day_broke_dn and close > orb_hi and vol_ok
+raw_dn = can_enter and not day_broke_up and not day_broke_dn and close < orb_lo and vol_ok
+
+if raw_up
+    day_broke_up := true
+    bo_up_bar    := bar_index
+
+if raw_dn
+    day_broke_dn := true
+    bo_dn_bar    := bar_index
+
+// ──────────────────────────────────────────────────────────────────────────────
+// FAILED ORB: breakout happened within last 2 bars, price is now back inside
+// → fade the trapped breakout traders
+// ──────────────────────────────────────────────────────────────────────────────
+fail_short = i_failed and not day_traded and strategy.position_size == 0
+             and day_broke_up and (bar_index - bo_up_bar) <= 2
+             and close < orb_hi and close > orb_lo
+
+fail_long  = i_failed and not day_traded and strategy.position_size == 0
+             and day_broke_dn and (bar_index - bo_dn_bar) <= 2
+             and close > orb_lo and close < orb_hi
+
+// ──────────────────────────────────────────────────────────────────────────────
+// RETEST: after a confirmed break, price pulls back to the broken ORB level
+// and closes back on the breakout side
+// ──────────────────────────────────────────────────────────────────────────────
+tol = 0.0015  // 0.15% allowance for dips through the ORB level on retest
+
+retest_long  = i_retest and can_enter and day_broke_up
+               and low <= orb_hi * (1.0 + tol) and close > orb_hi
+
+retest_short = i_retest and can_enter and day_broke_dn
+               and high >= orb_lo * (1.0 - tol) and close < orb_lo
+
+// Final entry signals
+enter_long  = (i_retest ? retest_long  : raw_up)  or fail_long
+enter_short = (i_retest ? retest_short : raw_dn)   or fail_short
+
+// ══════════════════════════════════════════════════════════════════════════════
+// EXECUTION  (2 contracts split across TP1 and TP2)
+// ══════════════════════════════════════════════════════════════════════════════
+
+var float act_tp1 = na
+var float act_tp2 = na
+var float act_sl  = na
+
+if enter_long
+    sl_l  = i_sl_orb ? orb_lo            : close - atr * i_sl_atr
+    tp1_l = close + orb_range * i_tp1_rr
+    tp2_l = close + orb_range * i_tp2_rr
+    strategy.entry("Long",  strategy.long,  qty=2)
+    strategy.exit ("L-TP1", "Long",  qty=1, limit=tp1_l, stop=sl_l)
+    strategy.exit ("L-TP2", "Long",  qty=1, limit=tp2_l, stop=sl_l)
+    act_tp1    := tp1_l
+    act_tp2    := tp2_l
+    act_sl     := sl_l
+    day_traded := true
+
+if enter_short
+    sl_s  = i_sl_orb ? orb_hi            : close + atr * i_sl_atr
+    tp1_s = close - orb_range * i_tp1_rr
+    tp2_s = close - orb_range * i_tp2_rr
+    strategy.entry("Short", strategy.short, qty=2)
+    strategy.exit ("S-TP1", "Short", qty=1, limit=tp1_s, stop=sl_s)
+    strategy.exit ("S-TP2", "Short", qty=1, limit=tp2_s, stop=sl_s)
+    act_tp1    := tp1_s
+    act_tp2    := tp2_s
+    act_sl     := sl_s
+    day_traded := true
+
+// Clear target lines once flat
+if strategy.position_size == 0 and day_traded
+    act_tp1 := na
+    act_tp2 := na
+    act_sl  := na
+
+// ══════════════════════════════════════════════════════════════════════════════
+// VISUALS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Opening range box (shaded region for the ORB candles)
+var box orb_box = na
+if orb_just_set
+    box.delete(orb_box)
+    orb_box := box.new(
+         orb_s_idx, orb_hi, bar_index, orb_lo,
+         border_color = color.new(color.blue, 30),
+         border_width = 1,
+         bgcolor      = i_box_fill)
+
+// ORB level lines extending through session
+plot(orb_ready and in_sess ? orb_hi              : na, "ORB High", color.new(color.blue, 20), 1, plot.style_linebr)
+plot(orb_ready and in_sess ? orb_lo              : na, "ORB Low",  color.new(color.blue, 20), 1, plot.style_linebr)
+plot(orb_ready and in_sess ? (orb_hi + orb_lo)/2 : na, "ORB Mid",  color.new(color.gray, 55), 1, plot.style_linebr)
+
+// Active trade management lines
+plot(act_tp1, "TP1",  color.new(color.teal,   15), 1, plot.style_linebr)
+plot(act_tp2, "TP2",  color.new(color.teal,    0), 2, plot.style_linebr)
+plot(act_sl,  "Stop", color.new(color.orange,  5), 1, plot.style_linebr)
+
+// Entry signal markers
+plotshape(enter_long  and not fail_long,  "BO Long",    shape.triangleup,   location.belowbar, i_bull,                size=size.normal)
+plotshape(enter_short and not fail_short, "BO Short",   shape.triangledown, location.abovebar, i_bear,                size=size.normal)
+plotshape(fail_long,                       "Fail Long",  shape.triangleup,   location.belowbar, color.new(i_bull, 40), size=size.small)
+plotshape(fail_short,                      "Fail Short", shape.triangledown, location.abovebar, color.new(i_bear, 40), size=size.small)
+
+// Subtle background tint when volume is favourable
+bgcolor(in_sess and orb_ready and vol_ok ? color.new(color.green, 97) : na, title="Vol OK bg")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INFO TABLE
+// ══════════════════════════════════════════════════════════════════════════════
+
+var table tbl = table.new(position.top_right, 2, 7,
+     bgcolor      = color.new(color.black, 70),
+     border_color = color.new(color.gray,  60),
+     border_width = 1)
+
+if barstate.islast and i_show_tbl
+    lc = color.new(color.gray, 20)
+    sz = size.small
+
+    table.cell(tbl, 0, 0, "ORB Range", text_color=lc, text_size=sz)
+    table.cell(tbl, 1, 0,
+         na(orb_range) ? "Building…" : str.tostring(math.round(orb_range, 2)),
+         text_color=color.white, text_size=sz)
+
+    table.cell(tbl, 0, 1, "ORB High",  text_color=lc, text_size=sz)
+    table.cell(tbl, 1, 1, orb_ready ? str.tostring(math.round(orb_hi, 2)) : "—",
+         text_color=i_bull, text_size=sz)
+
+    table.cell(tbl, 0, 2, "ORB Low",   text_color=lc, text_size=sz)
+    table.cell(tbl, 1, 2, orb_ready ? str.tostring(math.round(orb_lo, 2)) : "—",
+         text_color=i_bear, text_size=sz)
+
+    table.cell(tbl, 0, 3, "Gap %",     text_color=lc, text_size=sz)
+    table.cell(tbl, 1, 3, str.tostring(math.round(gap_pct, 2)) + "%",
+         text_color=gap_ok ? color.lime : color.orange, text_size=sz)
+
+    table.cell(tbl, 0, 4, "ATR",       text_color=lc, text_size=sz)
+    table.cell(tbl, 1, 4, not na(atr) ? str.tostring(math.round(atr, 2)) : "—",
+         text_color=color.white, text_size=sz)
+
+    table.cell(tbl, 0, 5, "Mode",      text_color=lc, text_size=sz)
+    table.cell(tbl, 1, 5, i_retest ? "Retest" : "Breakout",
+         text_color=color.yellow, text_size=sz)
+
+    table.cell(tbl, 0, 6, "Traded",    text_color=lc, text_size=sz)
+    table.cell(tbl, 1, 6, day_traded ? "Yes" : "No",
+         text_color=day_traded ? color.gray : color.lime, text_size=sz)
