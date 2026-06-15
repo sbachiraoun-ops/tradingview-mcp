@@ -13,6 +13,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
+    "signals": "node scripts/signal_bot.js",
     "tv": "node src/cli/index.js",
     "test": "node --test tests/e2e.test.js tests/pine_analyze.test.js",
     "test:e2e": "node --test tests/e2e.test.js",
