@@ -1,0 +1,156 @@
+//@version=6
+// ============================================================================
+//  AMD · CISD · IFVG  —  NASDAQ 5-minute model (Mission 3)
+// ----------------------------------------------------------------------------
+//  Concept (ICT "Power of 3"):
+//    ACCUMULATION  -> a swing-based liquidity pool builds (last pivot high/low)
+//    MANIPULATION  -> price sweeps that liquidity (stop hunt) and rejects back
+//    CISD          -> Change in State of Delivery: close reclaims the sweep
+//                     candle's opposite extreme (order flow flips)
+//    IFVG          -> the bearish/bullish FVG left in the move INVERTS polarity
+//                     (price closes through it) and acts as the entry confirm
+//    DISTRIBUTION  -> the real expansion toward the opposite liquidity = our run
+//
+//  Risk model (handled for you): stop sits beyond the manipulation extreme,
+//  target is a fixed R multiple, size is fixed-% account risk per trade so a
+//  losing streak can't blow the drawdown budget.
+// ============================================================================
+strategy("AMD/CISD/IFVG — NQ 5m", overlay=true, initial_capital=100000,
+     pyramiding=0, calc_on_every_tick=false, process_orders_on_close=true,
+     commission_type=strategy.commission.cash_per_contract, commission_value=2.0,
+     slippage=2, max_boxes_count=200, max_labels_count=200, max_lines_count=200)
+
+// ── Inputs ──────────────────────────────────────────────────────────────────
+gSes   = "Session / Dates"
+useSes = input.bool(true,  "Trade only during session", group=gSes)
+sess   = input.session("0930-1600", "Session (exchange = NY)", group=gSes)
+kzOnly = input.bool(true,  "Restrict to AM kill zone", group=gSes)
+kz     = input.session("0930-1130", "Kill zone", group=gSes)
+tz     = input.string("America/New_York", "Timezone", group=gSes)
+useDt  = input.bool(false, "Limit by date range", group=gSes)
+dFrom  = input.time(timestamp("01 Jan 2023 00:00"), "From", group=gSes)
+dTo    = input.time(timestamp("01 Jan 2027 00:00"), "To",   group=gSes)
+
+gStr   = "Structure"
+pivLen = input.int(5, "Liquidity pivot length", minval=2, group=gStr)
+armBars= input.int(12, "Bars to confirm after sweep", minval=1, group=gStr)
+maxTpd = input.int(2, "Max trades per day", minval=1, group=gStr)
+
+gCfm   = "Confirmation"
+reqIFVG= input.bool(true,  "Require IFVG (inversion) confirm", group=gCfm)
+reqFVG = input.bool(false, "Require fresh FVG in displacement", group=gCfm)
+
+gRsk   = "Risk / Targets"
+riskPct= input.float(1.0, "Risk % of equity per trade", minval=0.1, step=0.1, group=gRsk)
+rr     = input.float(2.0, "Reward : Risk", minval=0.5, step=0.25, group=gRsk)
+slBuf  = input.int(4, "Stop buffer (ticks beyond sweep)", minval=0, group=gRsk)
+
+gViz   = "Visuals"
+showViz= input.bool(true, "Show sweeps / levels / FVG", group=gViz)
+
+// ── Context filters ───────────────────────────────────────────────────────────
+inSes  = not useSes or not na(time(timeframe.period, sess, tz))
+inKz   = not kzOnly or not na(time(timeframe.period, kz, tz))
+inDate = not useDt or (time >= dFrom and time <= dTo)
+tradeOK= inSes and inKz and inDate
+
+var int tradesToday = 0
+if ta.change(time("D")) != 0
+    tradesToday := 0
+
+// ── Liquidity pools = last confirmed swing high / low (ACCUMULATION) ───────────
+ph = ta.pivothigh(pivLen, pivLen)
+pl = ta.pivotlow(pivLen, pivLen)
+var float buyLiq  = na   // swing high  -> buy-side liquidity (sweep = bear setup)
+var float sellLiq = na   // swing low   -> sell-side liquidity (sweep = bull setup)
+buyLiq  := na(ph) ? buyLiq  : ph
+sellLiq := na(pl) ? sellLiq : pl
+
+// ── MANIPULATION: sweep of that liquidity with rejection back inside ───────────
+bullSweep = not na(sellLiq) and low  < sellLiq and close > sellLiq
+bearSweep = not na(buyLiq)  and high > buyLiq  and close < buyLiq
+
+// 3-bar fair value gaps
+bullFVG = low  > high[2]    // bullish imbalance
+bearFVG = high < low[2]     // bearish imbalance
+
+// ── Armed states + IFVG tracking ──────────────────────────────────────────────
+var bool  armL = false, var float cisdL = na, var float manipL = na, var int   barL = na, var float ifvgTopL = na
+var bool  armS = false, var float cisdS = na, var float manipH = na, var int   barS = na, var float ifvgBotS = na
+
+// arm LONG on a sell-side sweep
+if bullSweep and tradeOK
+    armL := true, cisdL := high, manipL := low, barL := bar_index, ifvgTopL := na
+if armL
+    manipL := math.min(manipL, low)
+    if bearFVG                       // a bearish FVG forms in the down-leg ...
+        ifvgTopL := low[2]           // ... its upper edge; close above it = inversion
+// expire / fail
+if armL and (bar_index - barL > armBars or close < manipL)
+    armL := false
+
+// arm SHORT on a buy-side sweep
+if bearSweep and tradeOK
+    armS := true, cisdS := low, manipH := high, barS := bar_index, ifvgBotS := na
+if armS
+    manipH := math.max(manipH, high)
+    if bullFVG
+        ifvgBotS := high[2]
+if armS and (bar_index - barS > armBars or close > manipH)
+    armS := false
+
+// ── CISD + IFVG confirmation = ENTRY (start of DISTRIBUTION) ───────────────────
+ifvgLongOK = not reqIFVG or (not na(ifvgTopL) and close > ifvgTopL)
+ifvgShortOK= not reqIFVG or (not na(ifvgBotS) and close < ifvgBotS)
+fvgLongOK  = not reqFVG  or bullFVG or bullFVG[1]
+fvgShortOK = not reqFVG  or bearFVG or bearFVG[1]
+
+longSig  = armL and close > cisdL and ifvgLongOK  and fvgLongOK
+shortSig = armS and close < cisdS and ifvgShortOK and fvgShortOK
+
+canTrade = strategy.position_size == 0 and tradesToday < maxTpd and tradeOK
+riskUSD  = strategy.equity * (riskPct / 100.0)
+
+if longSig and canTrade
+    slP = manipL - slBuf * syminfo.mintick
+    dist = close - slP
+    if dist > 0
+        qty = math.max(1, math.floor(riskUSD / (dist * syminfo.pointvalue)))
+        tpP = close + rr * dist
+        strategy.entry("Long", strategy.long, qty=qty)
+        strategy.exit("xL", "Long", stop=slP, limit=tpP)
+        tradesToday += 1
+        armL := false
+        if showViz
+            label.new(bar_index, low, "CISD▲", style=label.style_label_up, color=color.new(color.green,20), textcolor=color.white, size=size.tiny)
+
+if shortSig and canTrade
+    slP = manipH + slBuf * syminfo.mintick
+    dist = slP - close
+    if dist > 0
+        qty = math.max(1, math.floor(riskUSD / (dist * syminfo.pointvalue)))
+        tpP = close - rr * dist
+        strategy.entry("Short", strategy.short, qty=qty)
+        strategy.exit("xS", "Short", stop=slP, limit=tpP)
+        tradesToday += 1
+        armS := false
+        if showViz
+            label.new(bar_index, high, "CISD▼", style=label.style_label_down, color=color.new(color.red,20), textcolor=color.white, size=size.tiny)
+
+// ── Visuals ───────────────────────────────────────────────────────────────────
+if showViz
+    if bullSweep
+        label.new(bar_index, low,  "swept", yloc=yloc.belowbar, style=label.style_xcross, color=color.teal, size=size.tiny)
+    if bearSweep
+        label.new(bar_index, high, "swept", yloc=yloc.abovebar, style=label.style_xcross, color=color.maroon, size=size.tiny)
+    if bullFVG
+        box.new(bar_index[2], high[2], bar_index, low, border_color=color.new(color.green,60), bgcolor=color.new(color.green,88))
+    if bearFVG
+        box.new(bar_index[2], low[2], bar_index, high, border_color=color.new(color.red,60), bgcolor=color.new(color.red,88))
+
+plot(showViz ? buyLiq  : na, "Buy-side liq",  color=color.new(color.red,40),  style=plot.style_circles)
+plot(showViz ? sellLiq : na, "Sell-side liq", color=color.new(color.green,40), style=plot.style_circles)
+
+// ── Alerts ────────────────────────────────────────────────────────────────────
+alertcondition(longSig,  "Long signal",  "AMD/CISD/IFVG long")
+alertcondition(shortSig, "Short signal", "AMD/CISD/IFVG short")
