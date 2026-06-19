@@ -25,7 +25,7 @@ i_sess      = input.session("0930-1600", "RTH Session",                         
 i_retest    = input.bool  (false, "Wait for Retest Entry",                              group=G_ORB)
 i_failed    = input.bool  (true,  "Trade Failed ORB",                                   group=G_ORB)
 
-i_use_vol   = input.bool  (false, "Require Volume Spike",                               group=G_FILT)
+i_use_vol   = input.bool  (true,  "Require Volume Spike",                               group=G_FILT)
 i_vol_len   = input.int   (20,    "Volume MA Length",         minval=5,                 group=G_FILT)
 i_vol_mult  = input.float (1.3,   "Min Volume (x avg)",       minval=1.0, step=0.1,     group=G_FILT)
 i_max_gap   = input.float (2.0,   "Max Pre-mkt Gap %",        minval=0.0, step=0.1,     group=G_FILT)
@@ -145,10 +145,10 @@ fail_long  = i_failed and not day_traded and strategy.position_size == 0
 // ------------------------------------------------------------------------------
 tol = 0.005   // 0.5% allowance for dips through the ORB level on retest
 
-retest_long  = i_retest and can_enter and day_broke_up
+retest_long  = i_retest and can_enter and day_broke_up and vol_ok
                and low <= orb_hi * (1.0 + tol) and close > orb_hi
 
-retest_short = i_retest and can_enter and day_broke_dn
+retest_short = i_retest and can_enter and day_broke_dn and vol_ok
                and high >= orb_lo * (1.0 - tol) and close < orb_lo
 
 // Final entry signals
