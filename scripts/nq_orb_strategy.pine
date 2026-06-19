@@ -9,7 +9,9 @@ strategy(
      commission_type    = strategy.commission.cash_per_contract,
      commission_value   = 2.5,
      calc_on_every_tick = false,
-     max_bars_back      = 5000
+     max_bars_back      = 5000,
+     max_lines_count    = 500,
+     max_labels_count   = 500
 )
 
 // ==============================================================================
@@ -204,34 +206,99 @@ if strategy.position_size == 0 and day_traded
 // VISUALS
 // ==============================================================================
 
-// Opening range box (shaded region for the ORB candles)
+// 1. SESSION BACKGROUND — highlights RTH window so it is obvious at a glance
+bgcolor(in_sess ? color.new(color.blue, 88) : na, title="RTH Session bg")
+
+// 2. ORB BOX — shaded candle range for the opening window
 var box orb_box = na
 if orb_just_set
     box.delete(orb_box)
     orb_box := box.new(
          orb_s_idx, orb_hi, bar_index, orb_lo,
-         border_color = color.new(color.blue, 30),
-         border_width = 1,
+         border_color = color.new(color.blue, 10),
+         border_width = 2,
          bgcolor      = i_box_fill)
 
-// ORB level lines extending through session
-plot(orb_ready and in_sess ? orb_hi              : na, "ORB High", color.new(color.blue, 20), 1, plot.style_linebr)
-plot(orb_ready and in_sess ? orb_lo              : na, "ORB Low",  color.new(color.blue, 20), 1, plot.style_linebr)
-plot(orb_ready and in_sess ? (orb_hi + orb_lo)/2 : na, "ORB Mid",  color.new(color.gray, 55), 1, plot.style_linebr)
+// 3. ORB LEVEL LINES — bold dashed lines extending through session
+plot(orb_ready and in_sess ? orb_hi              : na, "ORB High", color.new(color.aqua, 10), 2, plot.style_linebr)
+plot(orb_ready and in_sess ? orb_lo              : na, "ORB Low",  color.new(color.aqua, 10), 2, plot.style_linebr)
+plot(orb_ready and in_sess ? (orb_hi + orb_lo)/2 : na, "ORB Mid",  color.new(color.gray, 50), 1, plot.style_linebr)
 
-// Active trade management lines
-plot(act_tp1, "TP1",  color.new(color.teal,   15), 1, plot.style_linebr)
-plot(act_tp2, "TP2",  color.new(color.teal,    0), 2, plot.style_linebr)
-plot(act_sl,  "Stop", color.new(color.orange,  5), 1, plot.style_linebr)
+// 4. ENTRY ARROWS — oversized labels so entries jump off the screen
+// Regular breakout entries
+if enter_long and not fail_long
+    label.new(bar_index, low,
+         text  = "BUY",
+         yloc  = yloc.belowbar,
+         style = label.style_label_up,
+         color = color.new(color.green, 0),
+         textcolor = color.white,
+         size  = size.large)
 
-// Entry signal markers
-plotshape(enter_long  and not fail_long,  "BO Long",    shape.triangleup,   location.belowbar, i_bull,                size=size.normal)
-plotshape(enter_short and not fail_short, "BO Short",   shape.triangledown, location.abovebar, i_bear,                size=size.normal)
-plotshape(fail_long,                       "Fail Long",  shape.triangleup,   location.belowbar, color.new(i_bull, 40), size=size.small)
-plotshape(fail_short,                      "Fail Short", shape.triangledown, location.abovebar, color.new(i_bear, 40), size=size.small)
+if enter_short and not fail_short
+    label.new(bar_index, high,
+         text  = "SELL",
+         yloc  = yloc.abovebar,
+         style = label.style_label_down,
+         color = color.new(color.red, 0),
+         textcolor = color.white,
+         size  = size.large)
 
-// Subtle background tint when volume is favourable
-bgcolor(in_sess and orb_ready and vol_ok ? color.new(color.green, 97) : na, title="Vol OK bg")
+// Failed-ORB fade entries
+if fail_long
+    label.new(bar_index, low,
+         text  = "FADE L",
+         yloc  = yloc.belowbar,
+         style = label.style_label_up,
+         color = color.new(color.teal, 0),
+         textcolor = color.white,
+         size  = size.normal)
+
+if fail_short
+    label.new(bar_index, high,
+         text  = "FADE S",
+         yloc  = yloc.abovebar,
+         style = label.style_label_down,
+         color = color.new(color.orange, 0),
+         textcolor = color.white,
+         size  = size.normal)
+
+// 5. SL / TP LINES — drawn per trade, 50 bars wide, with text tags on right
+LINE_LEN = 50
+
+if enter_long
+    line.new(bar_index, act_sl,  bar_index + LINE_LEN, act_sl,
+         color=color.red,             width=2, style=line.style_solid)
+    line.new(bar_index, act_tp1, bar_index + LINE_LEN, act_tp1,
+         color=color.new(color.yellow, 0), width=2, style=line.style_dashed)
+    line.new(bar_index, act_tp2, bar_index + LINE_LEN, act_tp2,
+         color=color.new(color.lime,   0), width=3, style=line.style_dashed)
+    label.new(bar_index + LINE_LEN, act_sl,
+         text="SL",  style=label.style_label_left,
+         color=color.new(color.red,    10), textcolor=color.white, size=size.small)
+    label.new(bar_index + LINE_LEN, act_tp1,
+         text="TP1", style=label.style_label_left,
+         color=color.new(color.yellow, 10), textcolor=color.black,  size=size.small)
+    label.new(bar_index + LINE_LEN, act_tp2,
+         text="TP2", style=label.style_label_left,
+         color=color.new(color.lime,   10), textcolor=color.black,  size=size.small)
+
+if enter_short
+    line.new(bar_index, act_sl,  bar_index + LINE_LEN, act_sl,
+         color=color.red,             width=2, style=line.style_solid)
+    line.new(bar_index, act_tp1, bar_index + LINE_LEN, act_tp1,
+         color=color.new(color.yellow, 0), width=2, style=line.style_dashed)
+    line.new(bar_index, act_tp2, bar_index + LINE_LEN, act_tp2,
+         color=color.new(color.lime,   0), width=3, style=line.style_dashed)
+    label.new(bar_index + LINE_LEN, act_sl,
+         text="SL",  style=label.style_label_left,
+         color=color.new(color.red,    10), textcolor=color.white, size=size.small)
+    label.new(bar_index + LINE_LEN, act_tp1,
+         text="TP1", style=label.style_label_left,
+         color=color.new(color.yellow, 10), textcolor=color.black,  size=size.small)
+    label.new(bar_index + LINE_LEN, act_tp2,
+         text="TP2", style=label.style_label_left,
+         color=color.new(color.lime,   10), textcolor=color.black,  size=size.small)
 
 // ==============================================================================
 // INFO TABLE
