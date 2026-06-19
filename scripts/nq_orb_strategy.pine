@@ -8,17 +8,24 @@ strategy(
      default_qty_value  = 2,
      commission_type    = strategy.commission.cash_per_contract,
      commission_value   = 2.5,
-     calc_on_every_tick = false
+     calc_on_every_tick = false,
+     max_bars_back      = 5000
 )
 
 // ==============================================================================
 // INPUTS
 // ==============================================================================
 
+var string G_DATE = "Backtest Range"
 var string G_ORB  = "Opening Range"
 var string G_FILT = "Filters"
 var string G_RISK = "Risk / Targets"
 var string G_VIS  = "Visual"
+
+// Default start = 60 days back from today so the report spans ~2 months
+i_from = input.time(timestamp("2025-04-13"), "Start Date", group=G_DATE)
+i_to   = input.time(timestamp("2099-12-31"), "End Date",   group=G_DATE)
+in_range = time >= i_from and time <= i_to
 
 i_orb_mins  = input.int   (15,    "ORB Window (min)",        minval=1, maxval=60,       group=G_ORB)
 i_sess      = input.session("0930-1600", "RTH Session",                                 group=G_ORB)
@@ -113,7 +120,7 @@ if sess_start
     bo_up_bar    := -9999
     bo_dn_bar    := -9999
 
-can_enter = in_sess and orb_ready and gap_ok and strategy.position_size == 0 and not day_traded
+can_enter = in_sess and orb_ready and gap_ok and in_range and strategy.position_size == 0 and not day_traded
 
 // Raw close-confirmed breakouts (first direction only)
 raw_up = can_enter and not day_broke_up and not day_broke_dn and close > orb_hi and vol_ok
