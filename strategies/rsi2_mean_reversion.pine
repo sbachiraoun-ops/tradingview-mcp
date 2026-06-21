@@ -5,14 +5,13 @@
 //  ENTRY : close > 200-SMA  AND  RSI(2) < threshold (default 5)
 //  STOP  : entry - (ATR x SL mult)              <-- explicit SL price
 //  TARGET: entry + (R multiple x risk)          <-- explicit TP price
-//  SIZE  : % -equity risk per trade
-//  Best market: NAS100 / US500 / US30 (or QQQ/SPY), Daily or 4H.
-//  Push PF toward 2: buyTh 5->3, slMult 2.5->3.0, rr 1.5->1.0 (mean-revert
-//  hits small targets often -> higher win rate -> higher PF).
+//  SIZE  : % of equity per trade (always affordable -> always fills)
+//  Best market: NAS100 / US500 / US30 / XAUUSD, 5m–Daily.
 // ============================================================================
 strategy("RSI-2 Mean Reversion — Entry/SL/TP", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=10,
      pyramiding=0, process_orders_on_close=true, calc_on_every_tick=false,
-     commission_type=strategy.commission.cash_per_contract, commission_value=2.0, slippage=2)
+     commission_type=strategy.commission.percent, commission_value=0.02, slippage=2)
 
 // ── Entry ─────────────────────────────────────────────────────────────────────
 gE       = "Entry"
@@ -30,9 +29,9 @@ tpAtr  = input.float(3.0, "Take-Profit (ATR x)", minval=0.25, step=0.25, group=g
 useTime= input.bool(true, "Time stop (safety exit)", group=gT)
 maxBars= input.int(10,    "Max bars in trade", minval=1, group=gT)
 
-// ── Risk ──────────────────────────────────────────────────────────────────────
-gR      = "Risk"
-riskPct = input.float(1.0, "Risk % of equity per trade", minval=0.1, step=0.1, group=gR)
+// ── Equity exposure ───────────────────────────────────────────────────────────
+gR     = "Sizing"
+qtyPct = input.float(10.0, "Equity % per trade", minval=1, step=1, group=gR)
 
 // ── Signal ────────────────────────────────────────────────────────────────────
 trendOK = close > ta.sma(close, trendLen)
@@ -43,16 +42,13 @@ longSig = trendOK and rsi < buyTh
 var float slPrice  = na
 var float tpPrice  = na
 var int   entryBar = na
-riskUSD = strategy.equity * riskPct / 100.0
 
 // ── ENTRY + attach explicit SL and TP ─────────────────────────────────────────
 if longSig and strategy.position_size == 0
-    sl   = close - slMult * atr
-    dist = close - sl
-    if dist > 0
-        tp  = tpMode == "R-multiple" ? close + rr * dist : close + tpAtr * atr
-        qty = math.max(1, math.floor(riskUSD / (dist * syminfo.pointvalue)))
-        strategy.entry("Long", strategy.long, qty=qty)
+    sl  = close - slMult * atr
+    tp  = tpMode == "R-multiple" ? close + rr * (close - sl) : close + tpAtr * atr
+    if close - sl > 0
+        strategy.entry("Long", strategy.long, qty=qtyPct, qty_type=strategy.percent_of_equity)
         strategy.exit("Exit", "Long", stop=sl, limit=tp)   // <-- SL + TP bracket
         slPrice  := sl
         tpPrice  := tp
