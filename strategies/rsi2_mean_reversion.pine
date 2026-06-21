@@ -1,23 +1,16 @@
 //@version=6
 // ============================================================================
-//  RSI-2 MEAN REVERSION (indices swing) — PF-tuned
+//  RSI-2 MEAN REVERSION — explicit ENTRY / STOP-LOSS / TAKE-PROFIT
 // ----------------------------------------------------------------------------
-//  Larry Connors' 2-period RSI edge with a modern risk overlay.
-//  Long-only dip-buying inside an uptrend (the historically proven side).
-//
-//  ENTRY  : close > 200-SMA  AND  RSI(2) < threshold  (default 5 = high PF)
-//  EXIT   : close > fast SMA (mean reached)  OR  RSI(2) > 65  OR  time-stop
-//  STOP   : 2.5 x ATR(10) below entry (wide on purpose — mean-reversion stops
-//           get hit right before the snapback)
-//  SIZE   : fixed % -equity risk per trade
-//
-//  Levers to push profit factor toward / above 2:
-//    - lower "RSI buy threshold" (5 -> 3)         : fewer, higher-quality dips
-//    - raise "Min consecutive lower closes" (0->2): only buy real flushes
-//    - widen "Stop = ATR x" (2.5 -> 3.0)          : fewer premature stop-outs
+//  ENTRY : close > 200-SMA  AND  RSI(2) < threshold (default 5)
+//  STOP  : entry - (ATR x SL mult)              <-- explicit SL price
+//  TARGET: entry + (R multiple x risk)          <-- explicit TP price
+//  SIZE  : % -equity risk per trade
 //  Best market: NAS100 / US500 / US30 (or QQQ/SPY), Daily or 4H.
+//  Push PF toward 2: buyTh 5->3, slMult 2.5->3.0, rr 1.5->1.0 (mean-revert
+//  hits small targets often -> higher win rate -> higher PF).
 // ============================================================================
-strategy("RSI-2 Mean Reversion — PF-tuned", overlay=true, initial_capital=100000,
+strategy("RSI-2 Mean Reversion — Entry/SL/TP", overlay=true, initial_capital=100000,
      pyramiding=0, process_orders_on_close=true, calc_on_every_tick=false,
      commission_type=strategy.commission.cash_per_contract, commission_value=2.0, slippage=2)
 
@@ -25,56 +18,54 @@ strategy("RSI-2 Mean Reversion — PF-tuned", overlay=true, initial_capital=1000
 gE       = "Entry"
 rsiLen   = input.int(2,   "RSI length", group=gE)
 buyTh    = input.float(5, "RSI buy threshold (<)", step=1, group=gE)
-trendLen = input.int(200, "Trend SMA (only buy above)", group=gE)
-needDown = input.int(0,   "Min consecutive lower closes (0=off)", minval=0, group=gE)
+trendLen = input.int(200, "Trend SMA (buy only above)", group=gE)
 
-// ── Exit ──────────────────────────────────────────────────────────────────────
-gX        = "Exit"
-useSMAexit= input.bool(true, "Exit on close > fast SMA", group=gX)
-smaExit   = input.int(5,     "Fast SMA", group=gX)
-useRSIexit= input.bool(true, "Exit on RSI > level", group=gX)
-exitRSI   = input.float(65,  "RSI exit level", group=gX)
-useTime   = input.bool(true, "Use time stop", group=gX)
-maxBars   = input.int(10,    "Max bars in trade", minval=1, group=gX)
+// ── Stop-Loss & Take-Profit (explicit) ────────────────────────────────────────
+gT     = "Stop-Loss / Take-Profit"
+atrLen = input.int(10,    "ATR length", group=gT)
+slMult = input.float(2.5, "STOP-LOSS = ATR x", minval=0.25, step=0.25, group=gT)
+tpMode = input.string("R-multiple", "TAKE-PROFIT mode", options=["R-multiple","ATR multiple"], group=gT)
+rr     = input.float(1.5, "Take-Profit (R multiple)", minval=0.25, step=0.25, group=gT)
+tpAtr  = input.float(3.0, "Take-Profit (ATR x)", minval=0.25, step=0.25, group=gT)
+useTime= input.bool(true, "Time stop (safety exit)", group=gT)
+maxBars= input.int(10,    "Max bars in trade", minval=1, group=gT)
 
 // ── Risk ──────────────────────────────────────────────────────────────────────
 gR      = "Risk"
 riskPct = input.float(1.0, "Risk % of equity per trade", minval=0.1, step=0.1, group=gR)
-atrLen  = input.int(10,    "ATR length", group=gR)
-atrMult = input.float(2.5, "Stop = ATR x", minval=0.5, step=0.25, group=gR)
 
-// ── Signals ───────────────────────────────────────────────────────────────────
+// ── Signal ────────────────────────────────────────────────────────────────────
 trendOK = close > ta.sma(close, trendLen)
 rsi     = ta.rsi(close, rsiLen)
 atr     = ta.atr(atrLen)
-
-var int downCount = 0
-downCount := close < close[1] ? downCount + 1 : 0
-downOK    = needDown <= 0 or downCount >= needDown
-
-longSig = trendOK and rsi < buyTh and downOK
+longSig = trendOK and rsi < buyTh
 
 var float slPrice  = na
+var float tpPrice  = na
 var int   entryBar = na
 riskUSD = strategy.equity * riskPct / 100.0
 
-// ── Entry ─────────────────────────────────────────────────────────────────────
+// ── ENTRY + attach explicit SL and TP ─────────────────────────────────────────
 if longSig and strategy.position_size == 0
-    sl   = close - atrMult * atr
+    sl   = close - slMult * atr
     dist = close - sl
     if dist > 0
+        tp  = tpMode == "R-multiple" ? close + rr * dist : close + tpAtr * atr
         qty = math.max(1, math.floor(riskUSD / (dist * syminfo.pointvalue)))
-        strategy.entry("L", strategy.long, qty=qty)
+        strategy.entry("Long", strategy.long, qty=qty)
+        strategy.exit("Exit", "Long", stop=sl, limit=tp)   // <-- SL + TP bracket
         slPrice  := sl
+        tpPrice  := tp
         entryBar := bar_index
 
-// ── Manage / exit ─────────────────────────────────────────────────────────────
-if strategy.position_size > 0
-    strategy.exit("sl", "L", stop=slPrice)
-    exitMean = (useSMAexit and close > ta.sma(close, smaExit)) or (useRSIexit and rsi > exitRSI)
-    timeOut  = useTime and not na(entryBar) and (bar_index - entryBar >= maxBars)
-    if exitMean or timeOut
-        strategy.close("L", comment = exitMean ? "mean" : "time")
+// ── Safety time-stop ──────────────────────────────────────────────────────────
+if strategy.position_size > 0 and useTime and not na(entryBar) and (bar_index - entryBar >= maxBars)
+    strategy.close("Long", comment="time")
 
+// ── Draw entry / SL / TP so they're visible on the chart ──────────────────────
+inTrade = strategy.position_size > 0
+plot(inTrade ? slPrice : na, "STOP-LOSS",   color=color.red,   style=plot.style_linebr, linewidth=2)
+plot(inTrade ? tpPrice : na, "TAKE-PROFIT", color=color.green, style=plot.style_linebr, linewidth=2)
+plot(inTrade ? strategy.position_avg_price : na, "Entry", color=color.gray, style=plot.style_linebr, linewidth=1)
 plot(ta.sma(close, trendLen), "Trend SMA", color=color.new(color.orange, 0))
 plotshape(longSig and strategy.position_size == 0, "Buy", shape.triangleup, location.belowbar, color.new(color.green, 0), size=size.tiny)
