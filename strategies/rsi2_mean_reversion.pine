@@ -29,9 +29,7 @@ tpAtr  = input.float(3.0, "Take-Profit (ATR x)", minval=0.25, step=0.25, group=g
 useTime= input.bool(true, "Time stop (safety exit)", group=gT)
 maxBars= input.int(10,    "Max bars in trade", minval=1, group=gT)
 
-// ── Equity exposure ───────────────────────────────────────────────────────────
-gR     = "Sizing"
-qtyPct = input.float(10.0, "Equity % per trade", minval=1, step=1, group=gR)
+// ── Sizing is set by default_qty_value above (% of equity per trade) ──────────
 
 // ── Signal ────────────────────────────────────────────────────────────────────
 trendOK = close > ta.sma(close, trendLen)
@@ -48,7 +46,7 @@ if longSig and strategy.position_size == 0
     sl  = close - slMult * atr
     tp  = tpMode == "R-multiple" ? close + rr * (close - sl) : close + tpAtr * atr
     if close - sl > 0
-        strategy.entry("Long", strategy.long, qty=qtyPct, qty_type=strategy.percent_of_equity)
+        strategy.entry("Long", strategy.long)
         strategy.exit("Exit", "Long", stop=sl, limit=tp)   // <-- SL + TP bracket
         slPrice  := sl
         tpPrice  := tp
