@@ -120,10 +120,22 @@ These tools can return large payloads. Follow these rules to avoid context bloat
 - OHLCV capped at 500 bars, trades at 20 per request
 - Pine labels capped at 50 per study by default (pass `max_labels` to override)
 
+## Telegram Bridge
+
+`npm run telegram` starts a second front end onto the same chart: a Telegram bot the user
+chats with from their phone. It shares `src/core/*` with the MCP server, so both see one
+live chart. Code lives in `src/telegram/`, docs in `TELEGRAM.md`.
+
+It exposes a deliberately smaller surface than MCP — read tools, symbol/timeframe/indicator
+changes, alerts, screenshots. Pine editing, replay trading, drawings and layouts are left to
+Claude Code. If asked to extend the bot, add to `TOOLS` in `src/telegram/tools.js`.
+
 ## Architecture
 
 ```
-Claude Code ←→ MCP Server (stdio) ←→ CDP (localhost:9222) ←→ TradingView Desktop (Electron)
+Claude Code ←→ MCP Server (stdio) ←──┐
+                                     ├─→ src/core ←→ CDP (localhost:9222) ←→ TradingView Desktop
+Telegram ←→ Telegram bridge ─────────┘
 ```
 
 Pine graphics path: `study._graphics._primitivesCollection.dwglines.get('lines').get(false)._primitivesDataById`

@@ -66,6 +66,7 @@ Gives your AI assistant eyes and hands on your own chart:
 - **Multi-pane layouts** — set up 2x2, 3x1, etc. grids with different symbols per pane
 - **Monitor your chart** — stream JSONL from your locally running chart for local monitoring scripts
 - **CLI access** — every MCP tool is also a `tv` CLI command, pipe-friendly with JSON output
+- **Telegram bridge** — chat with your chart from your phone (see [TELEGRAM.md](TELEGRAM.md))
 - **Launch TradingView** — auto-detect and launch with debug mode from any platform
 
 ## Install with Claude Code
@@ -133,6 +134,28 @@ Replace `/path/to/tradingview-mcp` with your actual path.
 ### 4. Verify
 
 Ask Claude: *"Use tv_health_check to verify TradingView is connected"*
+
+## Telegram
+
+Link your computer session to Telegram and talk to your chart from your phone.
+The bridge runs next to TradingView, long-polls Telegram (no public URL, no
+inbound port), and answers using the same core functions the MCP tools use.
+
+```bash
+export TELEGRAM_BOT_TOKEN="..."          # from @BotFather
+npm run telegram -- --whoami             # message the bot, get your chat ID
+export TELEGRAM_ALLOWED_CHAT_IDS="..."   # required — locks the bot to you
+export ANTHROPIC_API_KEY="..."           # optional; without it, commands only
+npm run telegram
+```
+
+> *"what's ES doing"* → `ES1! 6142.25 on the 5m. Up 18.50 (+0.30%) over the last 100 bars.`
+> *"switch to the 15 and show me"* → chart changes, screenshot arrives
+> *"where are my levels"* → reads the lines your Pine indicators drew
+
+Slash commands (`/state`, `/quote`, `/levels`, `/shot`, `/symbol ES1!`, `/tf 5`, …)
+work with or without an API key. Full setup, configuration, and troubleshooting:
+**[TELEGRAM.md](TELEGRAM.md)**.
 
 ## CLI
 
